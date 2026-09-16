@@ -117,3 +117,7 @@ All endpoints are served by the backend at `http://localhost:3000`:
 | `GET /api/penalty/:fixtureId` | Penalty shootout results |
 
 See [`INPLAY_STUDIO_SPEC.md`](./INPLAY_STUDIO_SPEC.md) for full response shapes and the Socket.io event payloads used between the Control Panel and the overlays.
+
+## License
+
+[MIT](./LICENSE)
