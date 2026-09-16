@@ -120,4 +120,4 @@ See [`INPLAY_STUDIO_SPEC.md`](./INPLAY_STUDIO_SPEC.md) for full response shapes 
 
 ## License
 
-[MIT](./LICENSE)
+[PolyForm Noncommercial 1.0.0](./LICENSE) — free to use, modify, and share for any noncommercial purpose. Commercial use requires a separate agreement with the copyright holder.
