@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  inplay-studio:
+    build: .
+    container_name: inplay-studio
+    restart: unless-stopped
+    ports:
+      - "3000:3000"        # Access at http://localhost:3000
+    env_file:
+      - .env               # Loads your API_FOOTBALL_KEY automatically
+    volumes:
+      - ./public:/app/public   # Hot-reload: edit HTML files without rebuilding

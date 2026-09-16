@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>InPlay Studio — Control Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root {
+    --accent: #00e5ff;
+    --bg: #0a1426;
+    --panel-bg: #121f36;
+    --border: rgba(255,255,255,0.12);
+    --green: #2ecc71;
+    --red: #e74c3c;
+    --yellow: #f1c40f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: #e8edf5;
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-family: 'Rajdhani', sans-serif; font-size: 22px; letter-spacing: 2px; margin: 0; color: var(--accent); }
+  #connection-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); display: inline-block; margin-right: 6px; }
+  #connection-dot.on { background: var(--green); }
+
+  .layout { display: grid; grid-template-columns: 340px 1fr 340px; gap: 16px; padding: 16px; }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-family: 'Rajdhani', sans-serif; font-size: 15px; letter-spacing: 1px; text-transform: uppercase; color: #8fa1b8; margin: 0 0 12px; }
+  .card p.hint { font-size: 11px; color: #6b7d94; margin: -6px 0 10px; line-height: 1.4; }
+
+  .demo-card { border-color: rgba(255,213,74,0.4); }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+  .switch { position: relative; display: inline-block; width: 42px; height: 22px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; inset: 0; background: #2a3a58; border-radius: 22px; transition: 0.2s; }
+  .slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(20px); }
+
+  input[type=text], select {
+    width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: #0d1830; color: #fff; font-size: 14px; margin-bottom: 10px;
+  }
+  input[type=color] {
+    width: 100%; height: 36px; padding: 2px; border-radius: 6px; border: 1px solid var(--border);
+    background: #0d1830; margin-bottom: 10px; cursor: pointer;
+  }
+  textarea {
+    width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: #0d1830; color: #fff; font-size: 13px; margin-bottom: 10px;
+    font-family: inherit; line-height: 1.6; resize: vertical;
+  }
+  button {
+    cursor: pointer; border: 1px solid var(--border); background: #16233d; color: #fff;
+    padding: 10px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  button:hover { background: #1c2c4c; border-color: var(--accent); }
+  button.active { background: var(--accent); color: #06121f; border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06121f; }
+  button.danger:hover { border-color: var(--red); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .color-grid label { font-size: 11px; color: #8fa1b8; display: block; margin-bottom: 2px; }
+  .btn-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .full { grid-column: 1 / -1; }
+
+  .score-display { text-align: center; padding: 14px 0; }
+  .score-display .teams { display: flex; justify-content: space-between; font-size: 13px; color: #cfd8e3; margin-bottom: 6px; }
+  .score-display .score { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 40px; }
+  .score-display .time { color: var(--accent); font-size: 13px; }
+
+  .lineup-toggle-row { display: flex; gap: 8px; }
+  .lineup-toggle-row button { flex: 1; }
+
+  .social-row { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
+  .social-row .social-handle { flex: 1; margin-bottom: 0; }
+  .social-row .social-platform { width: 120px; margin-bottom: 0; flex-shrink: 0; }
+  .social-row .remove-social { padding: 6px 10px; flex-shrink: 0; }
+
+  #log { max-height: 160px; overflow-y: auto; font-size: 12px; color: #8fa1b8; font-family: monospace; }
+  #log div { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+
+  .field-label { font-size: 12px; color: #8fa1b8; margin-bottom: 4px; display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>INPLAY STUDIO — CONTROL PANEL</h1>
+  <div><span id="connection-dot"></span><span id="connection-text">disconnected</span></div>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT COLUMN: demo mode, match info, sync, score -->
+  <div>
+    <div class="card demo-card">
+      <h2>🎬 Demo Mode</h2>
+      <p class="hint">No API key yet? Turn this on to preview every panel with sample data — no fixture ID needed.</p>
+      <div class="toggle-row">
+        <span id="demo-mode-label">Off</span>
+        <label class="switch">
+          <input type="checkbox" id="demo-mode-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Fixture</h2>
+      <label class="field-label">Fixture ID</label>
+      <input type="text" id="fixture-id" placeholder="e.g. 1035274">
+      <div class="btn-row">
+        <button class="primary full" id="btn-start-sync">Start Auto-Sync</button>
+      </div>
+      <div class="btn-row">
+        <button class="full danger" id="btn-stop-sync" disabled>Stop Auto-Sync</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Live Score</h2>
+      <div class="score-display">
+        <div class="teams"><span id="score-home-name">—</span><span id="score-away-name">—</span></div>
+        <div class="score"><span id="score-home-val">0</span> : <span id="score-away-val">0</span></div>
+        <div class="time" id="score-time">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Activity Log</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <!-- CENTER COLUMN: manual event triggers, alerts, panels -->
+  <div>
+    <div class="card">
+      <h2>Manual Events</h2>
+      <div class="btn-grid">
+        <button data-event="goal" data-side="home">⚽ Goal Home</button>
+        <button data-event="goal" data-side="away">⚽ Goal Away</button>
+        <button data-event="yellowcard" data-side="home">🟨 Yellow Home</button>
+        <button data-event="yellowcard" data-side="away">🟨 Yellow Away</button>
+        <button data-event="redcard" data-side="home">🟥 Red Home</button>
+        <button data-event="redcard" data-side="away">🟥 Red Away</button>
+        <button data-event="sub" data-side="home">↕️ Sub Home</button>
+        <button data-event="sub" data-side="away">↕️ Sub Away</button>
+        <button data-event="var" data-side="home" class="full">📺 VAR Check</button>
+        <button data-event="halftime" class="full">⏸️ Half Time</button>
+        <button data-event="fulltime" class="full">🏁 Full Time</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Global Alert</h2>
+      <input type="text" id="alert-text" placeholder="Alert text, e.g. HALF TIME">
+      <input type="text" id="alert-sub" placeholder="Subtext (optional)">
+      <button class="full" id="btn-send-alert">Send Alert</button>
+    </div>
+
+    <div class="card">
+      <h2>Panels</h2>
+      <div class="btn-grid">
+        <button id="toggle-stats">Show Stats</button>
+        <button id="toggle-standings">Show Standings</button>
+        <button id="toggle-radar">Show Radar</button>
+        <button id="toggle-matches">Show Matches</button>
+        <button id="toggle-penalty">Show Penalty</button>
+        <button id="toggle-bracket" class="full">Show Bracket</button>
+        <button id="toggle-socials" class="full">Show Socials</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Lineups</h2>
+      <div class="lineup-toggle-row">
+        <button id="lineup-home">Show Home Lineup</button>
+        <button id="lineup-away">Show Away Lineup</button>
+      </div>
+      <button class="full" id="lineup-hide" style="margin-top:8px;">Hide Lineup</button>
+      <div class="toggle-row" style="margin-top:12px;">
+        <span>Auto-alternate Home ⇄ Away</span>
+        <label class="switch">
+          <input type="checkbox" id="lineup-auto-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Standings / Bracket League</h2>
+      <label class="field-label">League ID</label>
+      <input type="text" id="league-id" placeholder="e.g. 2 (Champions League)">
+      <label class="field-label">Season</label>
+      <input type="text" id="season" placeholder="e.g. 2024">
+    </div>
+
+    <div class="card">
+      <h2>Followed Teams</h2>
+      <p class="hint">One club or national team per line, using the exact name as it appears in API-Football (check via their team search if a team never shows up — e.g. Inter Milan is often just "Inter", AS Roma just "Roma"). These always appear in "Other Matches" alongside the major leagues, even for smaller competitions.</p>
+      <textarea id="vip-teams-textarea" rows="14"></textarea>
+      <button class="full" id="btn-save-teams">Save List</button>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN: branding, theme, background -->
+  <div>
+    <div class="card">
+      <h2>Socials</h2>
+      <p class="hint">Add more than one handle and the overlay will automatically alternate between them every few seconds.</p>
+      <div id="socials-list"></div>
+      <div class="btn-row">
+        <button id="btn-add-social">+ Add Handle</button>
+        <button class="primary" id="btn-update-socials">Update Socials</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Camera</h2>
+      <p class="hint">Both overlays reserve a transparent window for your OBS webcam source: on the main overlay it sits below the scoreboard, between the side panels and above the (now wider) radar (1040×460px); on the TikTok overlay it sits below the scoreboard, above the lineup (900×500px). Place your webcam source underneath this browser source in the scene stack and it shows through — even with a background image set.</p>
+      <div class="toggle-row">
+        <span>Show alignment guide</span>
+        <label class="switch">
+          <input type="checkbox" id="camera-guide-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Theme</h2>
+      <p class="hint">Colors apply live to every connected overlay.</p>
+      <label class="field-label">Competition Preset</label>
+      <select id="theme-preset">
+        <option value="default">Default (Cyan)</option>
+        <option value="ucl">Champions League</option>
+        <option value="epl">Premier League</option>
+        <option value="laliga">La Liga</option>
+      </select>
+      <div class="color-grid">
+        <div><label>Accent</label><input type="color" id="theme-accent" value="#00e5ff"></div>
+        <div><label>Gold / Highlight</label><input type="color" id="theme-gold" value="#ffd54a"></div>
+        <div><label>Home Color</label><input type="color" id="theme-home" value="#4fc3f7"></div>
+        <div><label>Away Color</label><input type="color" id="theme-away" value="#ef5350"></div>
+        <div><label>Scoreboard Start</label><input type="color" id="theme-sb-start" value="#0a1426"></div>
+        <div><label>Scoreboard End</label><input type="color" id="theme-sb-end" value="#121f36"></div>
+      </div>
+      <button class="full" id="btn-reset-theme">Reset to Default</button>
+    </div>
+
+    <div class="card">
+      <h2>Background</h2>
+      <p class="hint">Set any image URL, or auto-pick one based on the tracked competition (falls back to a blurred league badge if you haven't configured one).</p>
+      <label class="field-label">Image URL</label>
+      <input type="text" id="bg-url" placeholder="https://example.com/stadium.jpg">
+      <div class="btn-row">
+        <button id="btn-set-bg">Set Background</button>
+        <button id="btn-clear-bg">Clear</button>
+      </div>
+      <div class="toggle-row">
+        <span>Auto from competition</span>
+        <label class="switch">
+          <input type="checkbox" id="bg-auto-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── CONFIGURATION ──────────────────────────────────────────────────
+// Everything here has a matching control in the UI above — the UI is
+// just a convenient way to change these values live without editing
+// this file. Defaults below are what loads on first run.
+const CONFIG = {
+  // One or more handles — the overlay automatically alternates between
+  // them when more than one is configured.
+  socials: [
+    { handle: '@YourHandle', platform: 'twitter' },
+  ],
+
+  // Your followed teams — shown in "Other Matches" even outside major
+  // leagues. Use EXACT names as they appear in API-Football (also
+  // editable live from the "Followed Teams" card in the UI — that
+  // takes over once you save a list there, this is just the seed).
+  // A few of these (Inter, Roma, Ivory Coast, Al-Nassr...) commonly go
+  // by a shorter/different name in API-Football than the popular one —
+  // double check any that don't show up once you have a live fixture.
+  vipTeams: [
+    // Clubs
+    'Barcelona', 'Real Madrid', 'Paris Saint Germain', 'Monaco',
+    'Athletic Club', 'Atletico Madrid', 'Marseille',
+    'Liverpool', 'Manchester City', 'Manchester United', 'Newcastle',
+    'Arsenal', 'Aston Villa', 'Chelsea',
+    'Inter', 'Roma', 'AC Milan', 'Juventus', 'Como',
+    'Bayern Munich', 'Bayer Leverkusen', 'Borussia Dortmund',
+    'Lyon', 'Ajax', 'Napoli', 'Sporting CP', 'Porto', 'Galatasaray',
+    'Inter Miami', 'Al-Nassr',
+    // National teams
+    'France', 'Spain', 'Cameroon', 'England', 'Argentina', 'Morocco',
+    'Algeria', 'Portugal', 'Ivory Coast', 'Germany', 'Belgium',
+    'Norway', 'Netherlands',
+  ],
+
+  // Major league IDs to always show in "Other Matches"
+  // 39=EPL, 140=LaLiga, 78=Bundesliga, 135=SerieA, 61=Ligue1, 2=UCL
+  majorLeagueIds: [39, 140, 78, 135, 61, 2],
+
+  // Optional: leagueId -> background image URL. Point these at any
+  // image you like (a local file in public/, or one found online for
+  // that competition). Leagues not listed here fall back automatically
+  // to a blurred version of the league's own badge — no setup needed.
+  competitionBackgrounds: {
+    // 2: 'https://example.com/backgrounds/champions-league.jpg',
+  },
+};
+
+const THEME_DEFAULTS = {
+  accent: '#00e5ff', gold: '#ffd54a', homeColor: '#4fc3f7', awayColor: '#ef5350',
+  scoreboardStart: '#0a1426', scoreboardEnd: '#121f36',
+};
+
+const COMPETITION_PRESETS = {
+  default: { accent: '#00e5ff', gold: '#ffd54a', homeColor: '#4fc3f7', awayColor: '#ef5350', scoreboardStart: '#0a1426', scoreboardEnd: '#121f36', panelBg: 'rgba(10,20,38,0.95)', panelBorder: 'rgba(255,255,255,0.2)' },
+  ucl:     { accent: '#0e3ff0', gold: '#c9a24b', homeColor: '#4fc3f7', awayColor: '#ef5350', scoreboardStart: '#050b26', scoreboardEnd: '#0c1442', panelBg: 'rgba(5,11,38,0.95)', panelBorder: 'rgba(201,162,75,0.35)' },
+  epl:     { accent: '#3d195b', gold: '#00ff85', homeColor: '#4fc3f7', awayColor: '#ef5350', scoreboardStart: '#240435', scoreboardEnd: '#3d195b', panelBg: 'rgba(36,4,53,0.95)', panelBorder: 'rgba(0,255,133,0.3)' },
+  laliga:  { accent: '#ee8707', gold: '#ffffff', homeColor: '#4fc3f7', awayColor: '#ef5350', scoreboardStart: '#0d1b2a', scoreboardEnd: '#1b3a5c', panelBg: 'rgba(13,27,42,0.95)', panelBorder: 'rgba(238,135,7,0.35)' },
+};
+
+const socket = io();
+let syncTimer = null;
+let statsTimer = null;
+let lineupTimer = null;
+let matchesTimer = null;
+let penaltyTimer = null;
+let demoMode = false;
+let bgAutoEnabled = false;
+
+let memory = {
+  homeScore: 0,
+  awayScore: 0,
+  status: null,
+  seenEventKeys: new Set(),
+};
+
+let panelState = {
+  stats: false,
+  standings: false,
+  radar: false,
+  matches: false,
+  penalty: false,
+  bracket: false,
+  socials: false,
+  lineupSide: null,
+};
+
+let lastMatchData = null;
+
+function log(msg) {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.prepend(line);
+}
+
+function emit(type, payload) {
+  socket.emit('update_overlay', { type, payload });
+}
+
+socket.on('connect', () => {
+  document.getElementById('connection-dot').classList.add('on');
+  document.getElementById('connection-text').textContent = 'connected';
+});
+socket.on('disconnect', () => {
+  document.getElementById('connection-dot').classList.remove('on');
+  document.getElementById('connection-text').textContent = 'disconnected';
+});
+
+function getFixtureId() {
+  return document.getElementById('fixture-id').value.trim();
+}
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url} → ${res.status}`);
+  return res.json();
+}
+
+// ── Sample data for Demo Mode ─────────────────────────────────────────
+function svgAvatar(letter, bg) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="32" fill="${bg}"/><text x="32" y="41" font-size="26" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-weight="bold">${letter}</text></svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+
+const MOCK_MATCH = {
+  fixtureId: 999999,
+  status: '2H',
+  time: "67'",
+  homeTeam: 'Paris Saint Germain',
+  awayTeam: 'Marseille',
+  homeTeamId: 85,
+  awayTeamId: 81,
+  homeScore: 2,
+  awayScore: 1,
+  homeLogo: svgAvatar('PSG', '#00285e'),
+  awayLogo: svgAvatar('OM', '#2fa8de'),
+  homeScorers: "MBAPPÉ 23' ⚽ • DEMBÉLÉ 55' ⚽",
+  awayScorers: "AUBAMEYANG 40' ⚽",
+  leagueId: 61,
+  leagueName: 'Ligue 1',
+  leagueLogo: svgAvatar('L1', '#0055a4'),
+  season: 2024,
+  round: 'Regular Season - 5',
+  rawEvents: [],
+};
+
+function buildMockStats() {
+  return {
+    home: { name: 'PSG', logo: MOCK_MATCH.homeLogo },
+    away: { name: 'OM', logo: MOCK_MATCH.awayLogo },
+    stats: {
+      possession: { home: 58, away: 42 },
+      shotsTotal: { home: 14, away: 9 },
+      shotsOnTarget: { home: 6, away: 3 },
+      passes: { home: 84, away: 76 },
+      corners: { home: 7, away: 3 },
+      offsides: { home: 2, away: 1 },
+      fouls: { home: 9, away: 12 },
+      yellowCards: { home: 2, away: 3 },
+      saves: { home: 3, away: 5 },
+    },
+  };
+}
+
+function buildMockStandings() {
+  const teams = ['Paris SG', 'Marseille', 'Monaco', 'Lille', 'Lyon', 'Nice', 'Rennes', 'Lens', 'Reims', 'Toulouse', 'Nantes', 'Strasbourg', 'Montpellier', 'Brest'];
+  const palette = ['#00285e', '#2fa8de', '#cc0000', '#d2001c', '#003c8f', '#941c1c', '#ff0000', '#a60024', '#e4032e', '#5b0e0e', '#fadc00', '#0055a4', '#fa6400', '#e2001a'];
+  return {
+    title: 'Ligue 1',
+    logo: svgAvatar('L1', '#0055a4'),
+    table: teams.map((t, i) => ({
+      rank: i + 1,
+      team: t,
+      logo: svgAvatar(t[0], palette[i % palette.length]),
+      played: 10,
+      goalDiff: 15 - i * 2,
+      points: 30 - i * 2,
+    })),
+  };
+}
+
+function buildMockLineupTeam(side) {
+  const isHome = side === 'home';
+  const names = isHome
+    ? ['DONNARUMMA', 'HAKIMI', 'MARQUINHOS', 'SKRINIAR', 'NUNO MENDES', 'VITINHA', 'UGARTE', 'ZAIRE-EMERY', 'DEMBÉLÉ', 'MBAPPÉ', 'BARCOLA']
+    : ['PAU LÓPEZ', 'MBEMBA', 'BALERDI', 'LODI', 'CLAUSS', 'VEIGA', 'ROVELLA', 'NADIR', 'HARIT', 'AUBAMEYANG', 'VAZ'];
+  const grid = [[1], [2, 3, 4, 5], [6, 7, 8], [9, 10, 11]];
+  const rows = grid.map((row) => row.map((num, idx) => ({
+    number: num,
+    name: names[num - 1] || `PLAYER ${num}`,
+    events: num === (isHome ? 10 : 9) ? ['goal'] : num === 7 ? ['yc'] : [],
+    isCaptain: num === (isHome ? 2 : 4),
+    subInName: null,
+  })));
+  return {
+    name: isHome ? 'Paris Saint Germain' : 'Marseille',
+    logo: isHome ? MOCK_MATCH.homeLogo : MOCK_MATCH.awayLogo,
+    formation: '4-3-3',
+    primaryColor: isHome ? '#00285e' : '#2fa8de',
+    secondaryColor: '#ffffff',
+    rows,
+  };
+}
+
+function buildMockRadar() {
+  return {
+    homeTeam: MOCK_MATCH.homeTeam,
+    awayTeam: MOCK_MATCH.awayTeam,
+    homeLogo: MOCK_MATCH.homeLogo,
+    awayLogo: MOCK_MATCH.awayLogo,
+    homePossession: 58,
+    awayPossession: 42,
+    homeXg: 1.8,
+    awayXg: 0.9,
+    dominantSide: 'home',
+    status: '2H',
+  };
+}
+
+function buildMockMatches() {
+  const games = [
+    ['Real Madrid', 'Sevilla', 3, 1, '#ffffff', '#d3021d'],
+    ['Manchester City', 'Chelsea', 1, 1, '#6cabdd', '#034694'],
+    ['Bayern Munich', 'Dortmund', 2, 0, '#dc052d', '#fde100'],
+    ['Inter', 'Juventus', 0, 0, '#010e80', '#000000'],
+  ];
+  return games.map(([homeTeam, awayTeam, homeScore, awayScore, hc, ac], i) => ({
+    fixtureId: 900000 + i,
+    time: `${34 + i * 3}'`,
+    homeTeam, awayTeam, homeScore, awayScore,
+    homeLogo: svgAvatar(homeTeam[0], hc),
+    awayLogo: svgAvatar(awayTeam[0], ac),
+  }));
+}
+
+function buildMockPenalty() {
+  return {
+    homeTeam: MOCK_MATCH.homeTeam,
+    awayTeam: MOCK_MATCH.awayTeam,
+    homeLogo: MOCK_MATCH.homeLogo,
+    awayLogo: MOCK_MATCH.awayLogo,
+    homePenalties: ['scored', 'scored', 'missed', 'scored', 'scored'],
+    awayPenalties: ['scored', 'missed', 'scored', 'scored'],
+    compLogo: MOCK_MATCH.leagueLogo,
+    homeScore: 4,
+    awayScore: 3,
+  };
+}
+
+function buildMockBracket() {
+  const team = (name, color) => ({ name, logo: svgAvatar(name[0], color) });
+  const t = {
+    psg: team('PSG', '#00285e'), dortmund: team('Dortmund', '#fde100'),
+    madrid: team('Real Madrid', '#ffffff'), city: team('Man City', '#6cabdd'),
+    bayern: team('Bayern', '#dc052d'), atletico: team('Atlético', '#ce3524'),
+    milan: team('AC Milan', '#fb090b'), barca: team('Barcelona', '#a50044'),
+  };
+  const matchup = (a, b, sa, sb) => ({
+    homeTeam: a.name, homeLogo: a.logo, homeScore: sa,
+    awayTeam: b.name, awayLogo: b.logo, awayScore: sb,
+    winner: sa === sb ? null : sa > sb ? 'home' : 'away',
+  });
+  return {
+    title: 'UEFA Champions League',
+    logo: svgAvatar('CL', '#0e3ff0'),
+    rounds: [
+      { round: 'Round of 16', matchups: [matchup(t.psg, t.dortmund, 3, 1), matchup(t.madrid, t.city, 2, 2), matchup(t.bayern, t.atletico, 4, 2), matchup(t.milan, t.barca, 1, 3)] },
+      { round: 'Quarter-finals', matchups: [matchup(t.psg, t.madrid, 1, 1), matchup(t.bayern, t.barca, 2, 3)] },
+      { round: 'Semi-finals', matchups: [matchup(t.madrid, t.barca, 3, 2)] },
+      { round: 'Final', matchups: [matchup(t.madrid, t.psg, 0, 0)] },
+    ],
+  };
+}
+
+function enableDemoMode() {
+  demoMode = true;
+  lastMatchData = { ...MOCK_MATCH };
+  document.getElementById('score-home-name').textContent = MOCK_MATCH.homeTeam;
+  document.getElementById('score-away-name').textContent = MOCK_MATCH.awayTeam;
+  document.getElementById('score-home-val').textContent = MOCK_MATCH.homeScore;
+  document.getElementById('score-away-val').textContent = MOCK_MATCH.awayScore;
+  document.getElementById('score-time').textContent = MOCK_MATCH.time;
+  emit('LIVE_UPDATE', MOCK_MATCH);
+  applyAutoBackground(MOCK_MATCH);
+  log('Demo mode ON — scoreboard loaded with sample data. Toggle any panel to preview it.');
+}
+
+function disableDemoMode() {
+  demoMode = false;
+  log('Demo mode OFF — panels will use live API data again.');
+}
+
+document.getElementById('demo-mode-toggle').addEventListener('change', (e) => {
+  document.getElementById('demo-mode-label').textContent = e.target.checked ? 'On' : 'Off';
+  if (e.target.checked) enableDemoMode();
+  else disableDemoMode();
+});
+
+// ── Goal scorer resolver: 3-layer fallback ──────────────────────────
+function resolveScorerName(matchData, side) {
+  const teamId = side === 'home' ? matchData.homeTeamId : matchData.awayTeamId;
+
+  const goalEvents = (matchData.rawEvents || [])
+    .filter((e) => e.type === 'Goal' && e.team && e.team.id === teamId);
+  if (goalEvents.length) {
+    const last = goalEvents[goalEvents.length - 1];
+    return { name: last.player.name, resolved: true };
+  }
+
+  const scorersStr = side === 'home' ? matchData.homeScorers : matchData.awayScorers;
+  if (scorersStr) {
+    const parts = scorersStr.split('•').map((s) => s.trim());
+    const lastEntry = parts[parts.length - 1];
+    const nameMatch = lastEntry && lastEntry.match(/^([A-ZÀ-Ý' -]+)\s+\d/);
+    if (nameMatch) return { name: nameMatch[1].trim(), resolved: true };
+  }
+
+  return { name: null, resolved: false };
+}
+
+function triggerGoalEvent(side, matchData) {
+  const teamName = side === 'home' ? matchData.homeTeam : matchData.awayTeam;
+  const teamLogo = side === 'home' ? matchData.homeLogo : matchData.awayLogo;
+  const { name, resolved } = resolveScorerName(matchData, side);
+
+  emit('FULL_SCREEN_EVENT', {
+    type: 'goal',
+    player: resolved ? name : `BUT POUR ${teamName.toUpperCase()}`,
+    teamLogo,
+  });
+  log(`GOAL ${side.toUpperCase()} — ${teamName}${resolved ? ` (${name})` : ' (resolving scorer…)'}`);
+
+  if (!resolved && !demoMode) {
+    setTimeout(async () => {
+      try {
+        const fresh = await fetchJSON(`/api/match/${getFixtureId()}`);
+        const retry = resolveScorerName(fresh, side);
+        if (retry.resolved) {
+          emit('FULL_SCREEN_EVENT', { type: 'goal', player: retry.name, teamLogo });
+          log(`Scorer resolved on retry: ${retry.name}`);
+        }
+      } catch (e) { /* ignore */ }
+    }, 5000);
+  }
+}
+
+// ── Manual event triggers ────────────────────────────────────────────
+document.querySelectorAll('[data-event]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const type = btn.dataset.event;
+    const side = btn.dataset.side;
+    const matchData = lastMatchData;
+    const teamName = side && matchData ? (side === 'home' ? matchData.homeTeam : matchData.awayTeam) : null;
+    const teamLogo = side && matchData ? (side === 'home' ? matchData.homeLogo : matchData.awayLogo) : null;
+
+    if (type === 'goal' && matchData) {
+      triggerGoalEvent(side, matchData);
+      return;
+    }
+
+    emit('FULL_SCREEN_EVENT', {
+      type,
+      player: teamName ? `${teamName}` : undefined,
+      teamLogo,
+    });
+    log(`Manual trigger: ${type}${side ? ` (${side})` : ''}`);
+  });
+});
+
+document.getElementById('btn-send-alert').addEventListener('click', () => {
+  const text = document.getElementById('alert-text').value.trim();
+  const sub = document.getElementById('alert-sub').value.trim();
+  if (!text) return;
+  emit('GLOBAL_ALERT', { text, sub });
+  log(`Global alert: ${text}`);
+});
+
+// ── Auto-Sync brain ──────────────────────────────────────────────────
+function detectNewEvents(matchData) {
+  (matchData.rawEvents || []).forEach((e) => {
+    const key = `${e.time.elapsed}-${e.time.extra || 0}-${e.type}-${e.detail}-${e.player?.id}-${e.team?.id}`;
+    if (memory.seenEventKeys.has(key)) return;
+    memory.seenEventKeys.add(key);
+
+    if (e.type === 'Card') {
+      const eventType = e.detail === 'Yellow Card' ? 'yellowcard' : 'redcard';
+      const teamLogo = e.team.id === matchData.homeTeamId ? matchData.homeLogo : matchData.awayLogo;
+      emit('FULL_SCREEN_EVENT', { type: eventType, player: e.player.name, teamLogo });
+      log(`${eventType} — ${e.player.name}`);
+    } else if (e.type === 'subst') {
+      const teamLogo = e.team.id === matchData.homeTeamId ? matchData.homeLogo : matchData.awayLogo;
+      emit('FULL_SCREEN_EVENT', { type: 'sub', playerOut: e.player.name, playerIn: e.assist?.name, teamLogo });
+      log(`Substitution — ${e.player.name} → ${e.assist?.name || '?'}`);
+    }
+  });
+}
+
+async function pollMatch() {
+  if (demoMode) return;
+  const fixtureId = getFixtureId();
+  if (!fixtureId) return;
+
+  let data;
+  try {
+    data = await fetchJSON(`/api/match/${fixtureId}`);
+  } catch (e) {
+    log(`Poll failed: ${e.message}`);
+    return;
+  }
+  lastMatchData = data;
+
+  document.getElementById('score-home-name').textContent = data.homeTeam;
+  document.getElementById('score-away-name').textContent = data.awayTeam;
+  document.getElementById('score-home-val').textContent = data.homeScore;
+  document.getElementById('score-away-val').textContent = data.awayScore;
+  document.getElementById('score-time').textContent = data.time;
+
+  emit('LIVE_UPDATE', {
+    homeTeam: data.homeTeam, awayTeam: data.awayTeam,
+    homeScore: data.homeScore, awayScore: data.awayScore,
+    time: data.time, homeLogo: data.homeLogo, awayLogo: data.awayLogo,
+    homeScorers: data.homeScorers, awayScorers: data.awayScorers,
+  });
+
+  applyAutoBackground(data);
+
+  if (data.homeScore > memory.homeScore) triggerGoalEvent('home', data);
+  if (data.awayScore > memory.awayScore) triggerGoalEvent('away', data);
+  memory.homeScore = data.homeScore;
+  memory.awayScore = data.awayScore;
+
+  detectNewEvents(data);
+
+  if (data.status === 'HT' && memory.status !== 'HT') {
+    emit('FULL_SCREEN_EVENT', { type: 'halftime' });
+    emit('GLOBAL_ALERT', { text: 'HALF TIME', sub: 'The match resumes shortly' });
+    log('Half-time detected');
+  }
+  if (['FT', 'AET', 'PEN'].includes(data.status) && !['FT', 'AET', 'PEN'].includes(memory.status)) {
+    emit('FULL_SCREEN_EVENT', { type: 'fulltime' });
+    emit('GLOBAL_ALERT', { text: 'FULL TIME', sub: '' });
+    log('Full-time detected');
+  }
+  memory.status = data.status;
+}
+
+document.getElementById('btn-start-sync').addEventListener('click', () => {
+  if (demoMode) { alert('Turn off Demo Mode first — auto-sync needs a real fixture ID.'); return; }
+  if (!getFixtureId()) { alert('Enter a Fixture ID first.'); return; }
+  memory = { homeScore: 0, awayScore: 0, status: null, seenEventKeys: new Set() };
+  pollMatch();
+  syncTimer = setInterval(pollMatch, 20000);
+  document.getElementById('btn-start-sync').disabled = true;
+  document.getElementById('btn-stop-sync').disabled = false;
+  log(`Auto-sync started for fixture ${getFixtureId()}`);
+});
+
+document.getElementById('btn-stop-sync').addEventListener('click', () => {
+  clearInterval(syncTimer);
+  document.getElementById('btn-start-sync').disabled = false;
+  document.getElementById('btn-stop-sync').disabled = true;
+  log('Auto-sync stopped');
+});
+
+// ── Panel toggles ─────────────────────────────────────────────────────
+function setToggleBtnState(id, on) {
+  document.getElementById(id).classList.toggle('active', on);
+}
+
+async function toggleStats() {
+  panelState.stats = !panelState.stats;
+  setToggleBtnState('toggle-stats', panelState.stats);
+  clearInterval(statsTimer);
+  if (!panelState.stats) { emit('TOGGLE_STATS', { show: false }); return; }
+
+  if (demoMode) { emit('TOGGLE_STATS', { show: true, ...buildMockStats() }); return; }
+
+  const fixtureId = getFixtureId();
+  const sync = async () => {
+    try {
+      const stats = await fetchJSON(`/api/statistics/${fixtureId}`);
+      emit('TOGGLE_STATS', { show: true, ...stats });
+    } catch (e) { log(`Stats fetch failed: ${e.message}`); }
+  };
+  await sync();
+  statsTimer = setInterval(sync, 60000);
+}
+
+async function toggleStandings() {
+  panelState.standings = !panelState.standings;
+  setToggleBtnState('toggle-standings', panelState.standings);
+  if (!panelState.standings) { emit('TOGGLE_STANDINGS', { show: false }); return; }
+
+  if (demoMode) { emit('TOGGLE_STANDINGS', { show: true, ...buildMockStandings() }); return; }
+
+  const league = document.getElementById('league-id').value.trim() || (lastMatchData?.leagueId ?? '');
+  const season = document.getElementById('season').value.trim() || (lastMatchData?.season ?? '');
+  try {
+    const data = await fetchJSON(`/api/standings/${league}/${season}`);
+    emit('TOGGLE_STANDINGS', { show: true, ...data });
+  } catch (e) { log(`Standings fetch failed: ${e.message}`); }
+}
+
+async function toggleRadar() {
+  panelState.radar = !panelState.radar;
+  setToggleBtnState('toggle-radar', panelState.radar);
+  if (!panelState.radar) { emit('TOGGLE_RADAR', { show: false }); return; }
+
+  if (demoMode) { emit('TOGGLE_RADAR', { show: true, ...buildMockRadar() }); return; }
+
+  try {
+    const data = await fetchJSON(`/api/radar/${getFixtureId()}`);
+    emit('TOGGLE_RADAR', { show: true, ...data });
+  } catch (e) { log(`Radar fetch failed: ${e.message}`); }
+}
+
+async function toggleMatches() {
+  panelState.matches = !panelState.matches;
+  setToggleBtnState('toggle-matches', panelState.matches);
+  clearInterval(matchesTimer);
+  if (!panelState.matches) { emit('TOGGLE_MATCHES', { show: false }); return; }
+
+  if (demoMode) { emit('TOGGLE_MATCHES', { show: true, matches: buildMockMatches() }); return; }
+
+  const params = new URLSearchParams({
+    excludeId: getFixtureId(),
+    vipTeams: getVipTeams().join(','),
+    leagues: CONFIG.majorLeagueIds.join(','),
+  });
+  const sync = async () => {
+    try {
+      const { matches } = await fetchJSON(`/api/live-matches?${params}`);
+      emit('TOGGLE_MATCHES', { show: true, matches });
+    } catch (e) { log(`Live matches fetch failed: ${e.message}`); }
+  };
+  await sync();
+  matchesTimer = setInterval(sync, 30000);
+}
+
+async function togglePenalty() {
+  panelState.penalty = !panelState.penalty;
+  setToggleBtnState('toggle-penalty', panelState.penalty);
+  clearInterval(penaltyTimer);
+  if (!panelState.penalty) { emit('TOGGLE_PENALTY', { show: false }); return; }
+
+  if (demoMode) { emit('TOGGLE_PENALTY', { show: true, ...buildMockPenalty() }); return; }
+
+  const sync = async () => {
+    try {
+      const data = await fetchJSON(`/api/penalty/${getFixtureId()}`);
+      emit('TOGGLE_PENALTY', { show: true, ...data });
+    } catch (e) { log(`Penalty fetch failed: ${e.message}`); }
+  };
+  await sync();
+  penaltyTimer = setInterval(sync, 10000);
+}
+
+async function toggleBracket() {
+  panelState.bracket = !panelState.bracket;
+  setToggleBtnState('toggle-bracket', panelState.bracket);
+  if (!panelState.bracket) { emit('TOGGLE_BRACKET', { show: false }); return; }
+
+  if (demoMode) { emit('TOGGLE_BRACKET', { show: true, ...buildMockBracket() }); return; }
+
+  const league = document.getElementById('league-id').value.trim() || (lastMatchData?.leagueId ?? '');
+  const season = document.getElementById('season').value.trim() || (lastMatchData?.season ?? '');
+  try {
+    const data = await fetchJSON(`/api/bracket/${league}/${season}`);
+    emit('TOGGLE_BRACKET', { show: true, ...data });
+  } catch (e) { log(`Bracket fetch failed: ${e.message}`); }
+}
+
+function toggleSocials() {
+  panelState.socials = !panelState.socials;
+  setToggleBtnState('toggle-socials', panelState.socials);
+  emit('TOGGLE_SOCIALS', { show: panelState.socials, socials: collectSocials() });
+}
+
+document.getElementById('toggle-stats').addEventListener('click', toggleStats);
+document.getElementById('toggle-standings').addEventListener('click', toggleStandings);
+document.getElementById('toggle-radar').addEventListener('click', toggleRadar);
+document.getElementById('toggle-matches').addEventListener('click', toggleMatches);
+document.getElementById('toggle-penalty').addEventListener('click', togglePenalty);
+document.getElementById('toggle-bracket').addEventListener('click', toggleBracket);
+document.getElementById('toggle-socials').addEventListener('click', toggleSocials);
+
+// ── Lineups ───────────────────────────────────────────────────────────
+async function showLineup(side) {
+  panelState.lineupSide = side;
+  setToggleBtnState('lineup-home', side === 'home');
+  setToggleBtnState('lineup-away', side === 'away');
+  clearInterval(lineupTimer);
+
+  const autoAlternate = document.getElementById('lineup-auto-toggle').checked;
+
+  if (demoMode) {
+    emit('SHOW_LINEUPS', { show: true, side, home: buildMockLineupTeam('home'), away: buildMockLineupTeam('away'), autoAlternate });
+    return;
+  }
+
+  const fixtureId = getFixtureId();
+  const sync = async () => {
+    try {
+      const data = await fetchJSON(`/api/lineups/${fixtureId}`);
+      emit('SHOW_LINEUPS', { show: true, side, home: data.home, away: data.away, autoAlternate });
+    } catch (e) { log(`Lineups fetch failed: ${e.message}`); }
+  };
+  await sync();
+  lineupTimer = setInterval(sync, 30000);
+}
+
+document.getElementById('lineup-home').addEventListener('click', () => showLineup('home'));
+document.getElementById('lineup-away').addEventListener('click', () => showLineup('away'));
+document.getElementById('lineup-hide').addEventListener('click', () => {
+  panelState.lineupSide = null;
+  setToggleBtnState('lineup-home', false);
+  setToggleBtnState('lineup-away', false);
+  clearInterval(lineupTimer);
+  emit('SHOW_LINEUPS', { show: false });
+});
+
+document.getElementById('lineup-auto-toggle').addEventListener('change', () => {
+  // Re-push the current lineup with the new autoAlternate flag, letting
+  // each overlay handle the home/away cycling itself.
+  if (panelState.lineupSide) showLineup(panelState.lineupSide);
+});
+
+// ── Socials (one or more handles, alternated by the overlay) ───────────
+function addSocialRow(handle = '', platform = 'twitter') {
+  const row = document.createElement('div');
+  row.className = 'social-row';
+  row.innerHTML = `
+    <input type="text" class="social-handle" placeholder="@handle" value="${handle}">
+    <select class="social-platform">
+      <option value="twitter">X / Twitter</option>
+      <option value="instagram">Instagram</option>
+      <option value="tiktok">TikTok</option>
+      <option value="youtube">YouTube</option>
+    </select>
+    <button type="button" class="remove-social">✕</button>
+  `;
+  row.querySelector('.social-platform').value = platform;
+  row.querySelector('.remove-social').addEventListener('click', () => row.remove());
+  document.getElementById('socials-list').appendChild(row);
+}
+
+function collectSocials() {
+  return Array.from(document.querySelectorAll('.social-row'))
+    .map((row) => ({
+      handle: row.querySelector('.social-handle').value.trim(),
+      platform: row.querySelector('.social-platform').value,
+    }))
+    .filter((s) => s.handle);
+}
+
+CONFIG.socials.forEach((s) => addSocialRow(s.handle, s.platform));
+
+document.getElementById('btn-add-social').addEventListener('click', () => addSocialRow());
+
+document.getElementById('btn-update-socials').addEventListener('click', () => {
+  const socials = collectSocials();
+  if (!socials.length) { alert('Add at least one handle first.'); return; }
+  if (panelState.socials) {
+    emit('TOGGLE_SOCIALS', { show: true, socials });
+    log(`Socials updated live: ${socials.map((s) => s.handle).join(', ')}`);
+  } else {
+    log(`Socials list saved (${socials.length}) — click "Show Socials" to display it.`);
+  }
+});
+
+// ── Followed Teams (persisted in this browser, seeded from CONFIG) ────
+function loadVipTeams() {
+  try {
+    const saved = localStorage.getItem('inplay_vip_teams');
+    if (saved) return JSON.parse(saved);
+  } catch (e) { /* ignore corrupt storage */ }
+  return CONFIG.vipTeams;
+}
+
+function getVipTeams() {
+  return document.getElementById('vip-teams-textarea').value
+    .split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+document.getElementById('vip-teams-textarea').value = loadVipTeams().join('\n');
+
+document.getElementById('btn-save-teams').addEventListener('click', () => {
+  const teams = getVipTeams();
+  try { localStorage.setItem('inplay_vip_teams', JSON.stringify(teams)); } catch (e) { /* ignore */ }
+  log(`Followed teams list saved (${teams.length} teams). Re-toggle "Show Matches" to apply it.`);
+});
+
+// ── Camera guide ─────────────────────────────────────────────────────
+document.getElementById('camera-guide-toggle').addEventListener('change', (e) => {
+  emit('TOGGLE_CAMERA_GUIDE', { show: e.target.checked });
+  log(`Camera guide: ${e.target.checked ? 'ON — remember to turn this off before going live' : 'OFF'}`);
+});
+
+// ── Theme ─────────────────────────────────────────────────────────────
+function readThemeFromInputs() {
+  return {
+    accent: document.getElementById('theme-accent').value,
+    gold: document.getElementById('theme-gold').value,
+    homeColor: document.getElementById('theme-home').value,
+    awayColor: document.getElementById('theme-away').value,
+    scoreboardStart: document.getElementById('theme-sb-start').value,
+    scoreboardEnd: document.getElementById('theme-sb-end').value,
+  };
+}
+
+function applyThemeInputsToUI(theme) {
+  document.getElementById('theme-accent').value = theme.accent;
+  document.getElementById('theme-gold').value = theme.gold;
+  document.getElementById('theme-home').value = theme.homeColor;
+  document.getElementById('theme-away').value = theme.awayColor;
+  document.getElementById('theme-sb-start').value = theme.scoreboardStart;
+  document.getElementById('theme-sb-end').value = theme.scoreboardEnd;
+}
+
+['theme-accent', 'theme-gold', 'theme-home', 'theme-away', 'theme-sb-start', 'theme-sb-end'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', () => {
+    emit('SET_THEME', readThemeFromInputs());
+  });
+});
+
+document.getElementById('theme-preset').addEventListener('change', (e) => {
+  const preset = COMPETITION_PRESETS[e.target.value];
+  if (!preset) return;
+  applyThemeInputsToUI(preset);
+  emit('SET_THEME', preset);
+  log(`Theme preset applied: ${e.target.value}`);
+});
+
+document.getElementById('btn-reset-theme').addEventListener('click', () => {
+  document.getElementById('theme-preset').value = 'default';
+  applyThemeInputsToUI(THEME_DEFAULTS);
+  emit('SET_THEME', { ...THEME_DEFAULTS, panelBg: COMPETITION_PRESETS.default.panelBg, panelBorder: COMPETITION_PRESETS.default.panelBorder });
+  log('Theme reset to default');
+});
+
+// ── Background ────────────────────────────────────────────────────────
+function applyAutoBackground(matchData) {
+  if (!bgAutoEnabled || !matchData) return;
+  const custom = CONFIG.competitionBackgrounds[matchData.leagueId];
+  if (custom) {
+    emit('SET_BACKGROUND', { url: custom, blurred: false });
+    log(`Background: custom image for ${matchData.leagueName}`);
+  } else if (matchData.leagueLogo) {
+    emit('SET_BACKGROUND', { url: matchData.leagueLogo, blurred: true });
+    log(`Background: auto (blurred badge) for ${matchData.leagueName}`);
+  }
+}
+
+document.getElementById('btn-set-bg').addEventListener('click', () => {
+  const url = document.getElementById('bg-url').value.trim();
+  if (!url) return;
+  emit('SET_BACKGROUND', { url, blurred: false });
+  log('Background set from custom URL');
+});
+
+document.getElementById('btn-clear-bg').addEventListener('click', () => {
+  document.getElementById('bg-url').value = '';
+  emit('SET_BACKGROUND', { url: '' });
+  log('Background cleared');
+});
+
+document.getElementById('bg-auto-toggle').addEventListener('change', (e) => {
+  bgAutoEnabled = e.target.checked;
+  log(`Auto background from competition: ${bgAutoEnabled ? 'ON' : 'OFF'}`);
+  if (bgAutoEnabled && lastMatchData) applyAutoBackground(lastMatchData);
+});
+</script>
+</body>
+</html>

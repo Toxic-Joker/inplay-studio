@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>InPlay Studio — TikTok Overlay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root {
+    --accent: #00e5ff;
+    --scoreboard-bg-start: #0a1426;
+    --scoreboard-bg-end:   #121f36;
+    --home-color: #4fc3f7;
+    --away-color: #ef5350;
+    --panel-bg: rgba(10, 20, 38, 0.95);
+    --panel-border: rgba(255, 255, 255, 0.2);
+    --gold: #ffd54a;
+    --green: #2ecc71;
+    --red: #e74c3c;
+    /* Reserved transparent window for an OBS webcam source — sits just
+       below the scoreboard; the lineup panel sits below this window. */
+    --cam-left: 90px;
+    --cam-top: 170px;
+    --cam-width: 900px;
+    --cam-height: 500px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 1080px;
+    height: 1920px;
+    overflow: hidden;
+    background: transparent;
+    /* Anchors position:absolute descendants to this fixed 1080×1920
+       canvas instead of the actual browser viewport, so bottom/right
+       positioning stays correct even when previewed outside OBS. */
+    position: relative;
+    font-family: 'Inter', sans-serif;
+    color: #fff;
+  }
+
+  .display, .num { font-family: 'Rajdhani', sans-serif; font-weight: 700; }
+
+  .panel {
+    position: absolute;
+    background: var(--panel-bg);
+    border: 2px solid var(--panel-border);
+    border-radius: 10px;
+    box-shadow: 5px 5px 25px rgba(0,0,0,0.6);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.4s ease;
+  }
+
+  img.logo { width: 100%; height: 100%; object-fit: contain; }
+
+  /* ── Background layer (behind every panel) ─────────────────── */
+  /* No fill by default — transparent so a camera/game source below this
+     browser source in OBS shows through everywhere except panels. The
+     clip-path keeps the camera window clear even when a background
+     image IS set, so it never gets covered. */
+  #bg-layer {
+    position: absolute; inset: 0; z-index: 0; overflow: hidden;
+    clip-path: polygon(
+      0 0, 100% 0, 100% 100%, 0 100%, 0 0,
+      var(--cam-left) var(--cam-top),
+      var(--cam-left) calc(var(--cam-top) + var(--cam-height)),
+      calc(var(--cam-left) + var(--cam-width)) calc(var(--cam-top) + var(--cam-height)),
+      calc(var(--cam-left) + var(--cam-width)) var(--cam-top),
+      var(--cam-left) var(--cam-top)
+    );
+  }
+  #bg-layer img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.6s ease; filter: brightness(0.35); }
+  #bg-layer img.visible { opacity: 1; }
+  #bg-layer img.blurred { filter: blur(50px) brightness(0.45); transform: scale(1.25); }
+
+  /* ── Camera guide (setup aid only — toggle off before going live) ── */
+  #camera-guide {
+    position: absolute;
+    left: var(--cam-left); top: var(--cam-top); width: var(--cam-width); height: var(--cam-height);
+    border: 2px dashed var(--accent); border-radius: 8px;
+    background: rgba(0, 229, 255, 0.08);
+    z-index: 1;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 26px; letter-spacing: 3px; color: var(--accent);
+    pointer-events: none;
+  }
+
+  /* ── Scoreboard (top, full width) ──────────────────────────────── */
+  #full-scoreboard-wrapper {
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translate(-50%, -110%);
+    width: 1080px;
+    height: 150px;
+    background: linear-gradient(180deg, var(--scoreboard-bg-start), var(--scoreboard-bg-end));
+    border-bottom: 2px solid var(--panel-border);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.6);
+    z-index: 500;
+    transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+    display: flex;
+    flex-direction: column;
+  }
+  #full-scoreboard-wrapper.visible { transform: translate(-50%, 0); }
+
+  .scoreboard-main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 30px; }
+  #home-logo, #away-logo { width: 76px; height: 76px; }
+  .team-block { display: flex; align-items: center; gap: 16px; width: 380px; }
+  .team-block.away { flex-direction: row-reverse; text-align: right; }
+  .team-name { font-size: 34px; letter-spacing: 0.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .score-block { display: flex; flex-direction: column; align-items: center; width: 260px; }
+  .score-digits { font-size: 58px; line-height: 1; display: flex; gap: 12px; align-items: center; }
+  .score-digits span.sep { color: var(--accent); }
+  #display-time { font-size: 19px; color: var(--accent); margin-top: 4px; letter-spacing: 1px; }
+
+  .scorers-row { height: 34px; overflow: hidden; display: flex; border-top: 1px solid rgba(255,255,255,0.1); }
+  .scorers-col { flex: 1; overflow: hidden; white-space: nowrap; position: relative; font-size: 17px; }
+  .scorers-col.away { text-align: right; }
+  .scorers-track { display: inline-block; padding-left: 12px; }
+  @keyframes marquee-scroll { from { transform: translateX(0); } to { transform: translateX(var(--marquee-shift)); } }
+
+  .panel-header { display: flex; align-items: center; gap: 12px; font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 26px; margin-bottom: 18px; letter-spacing: 1px; }
+  .panel-header img { width: 38px; height: 38px; object-fit: contain; }
+
+  /* ── Lineup (below the camera window) ──────────────────────────── */
+  #lineup-panel {
+    left: 50%; top: calc(var(--cam-top) + var(--cam-height) + 20px); width: 720px; min-height: 1080px;
+    transform: translate(-50%, 120%);
+    padding: 22px 28px;
+  }
+  #lineup-panel.visible { transform: translate(-50%, 0); opacity: 1; }
+
+  .pitch {
+    position: relative;
+    width: 100%; height: 950px;
+    background: linear-gradient(180deg, #0e3d1f, #0a2e17);
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 10px;
+    margin-top: 10px;
+    overflow: hidden;
+  }
+  /* Halfway line + center circle — horizontal, matching the vertical
+     (top-to-bottom) formation layout rather than a left-right pitch. */
+  .pitch::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 2px; background: rgba(255,255,255,0.35); transform: translateY(-50%); }
+  .pitch::after { content: ''; position: absolute; left: 50%; top: 50%; width: 150px; height: 150px; border: 2px solid rgba(255,255,255,0.35); border-radius: 50%; transform: translate(-50%,-50%); }
+  .pitch-box, .pitch-box-small {
+    position: absolute; left: 50%; border: 2px solid rgba(255,255,255,0.35); transform: translateX(-50%);
+  }
+  .pitch-box { width: 60%; height: 13%; }
+  .pitch-box.top { top: 0; border-top: none; }
+  .pitch-box.bottom { bottom: 0; border-bottom: none; }
+  .pitch-box-small { width: 28%; height: 5.5%; }
+  .pitch-box-small.top { top: 0; border-top: none; }
+  .pitch-box-small.bottom { bottom: 0; border-bottom: none; }
+  .pitch-rows { position: absolute; inset: 0; }
+  .pitch-row { position: absolute; left: 0; right: 0; display: flex; justify-content: space-evenly; }
+  .player-token { display: flex; flex-direction: column; align-items: center; width: 90px; }
+  .player-circle {
+    width: 54px; height: 54px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .player-circle svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5)); }
+  .player-name { font-size: 14px; margin-top: 4px; text-align: center; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+  .player-captain { position: absolute; top: -8px; right: -8px; font-size: 13px; background: var(--gold); color: #222; border-radius: 50%; width: 19px; height: 19px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .player-event { position: absolute; bottom: -8px; left: -8px; font-size: 17px; }
+  .player-sub-in { font-size: 12px; color: var(--green); margin-top: 2px; }
+
+  /* ── Penalty bar (floats at the bottom of the camera window) ─────── */
+  #penalty-bar {
+    left: 50%; top: calc(var(--cam-top) + var(--cam-height) - 90px); transform: translate(-50%, -20px) scaleY(0);
+    transform-origin: top; width: 900px; padding: 14px 30px;
+    display: flex; align-items: center; gap: 20px;
+  }
+  #penalty-bar.visible { transform: translate(-50%, 0) scaleY(1); opacity: 1; }
+  .penalty-tab { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #06121f; font-size: 14px; font-weight: 700; padding: 3px 18px; border-radius: 12px; letter-spacing: 1px; }
+  .penalty-side { display: flex; align-items: center; gap: 12px; }
+  .penalty-side.away { flex-direction: row-reverse; }
+  .penalty-name { font-size: 18px; width: 130px; }
+  .penalty-circles { display: flex; gap: 7px; }
+  .penalty-circles.away { flex-direction: row-reverse; }
+  .pk-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); display: flex; align-items: center; justify-content: center; font-size: 12px; }
+  .pk-dot.scored { background: var(--green); border-color: var(--green); }
+  .pk-dot.missed { background: var(--red); border-color: var(--red); }
+  #penalty-comp-logo { width: 54px; height: 54px; }
+
+  /* ── Socials ──────────────────────────────────────────────────────── */
+  #socials-panel { left: 50%; bottom: 40px; transform: translate(-50%, 120%); padding: 14px 26px; }
+  #socials-panel.visible { transform: translate(-50%, 0); opacity: 1; }
+  #socials-inner { display: flex; align-items: center; gap: 12px; transition: opacity 0.3s ease; }
+  #socials-inner i { font-size: 28px; color: var(--accent); }
+  #socials-handle { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 22px; }
+
+  /* ── Full screen event ──────────────────────────────────────────────── */
+  #fs-event-container {
+    inset: 0; z-index: 9999; border-radius: 0; background: rgba(5,9,18,0.88);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: opacity 0.35s ease;
+  }
+  #fs-event-container.visible { opacity: 1; }
+  #fs-event-icon { font-size: 170px; margin-bottom: 24px; }
+  #fs-event-icon.spin { animation: spin-icon 0.9s ease-in-out; }
+  @keyframes spin-icon { from { transform: rotate(0deg) scale(0.5); } to { transform: rotate(360deg) scale(1); } }
+  #fs-event-title { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 84px; letter-spacing: 5px; color: var(--gold); text-shadow: 0 0 30px rgba(255,213,74,0.5); text-align: center; }
+  #fs-event-player { font-size: 32px; margin-top: 18px; letter-spacing: 1px; text-align: center; padding: 0 40px; }
+
+  /* ── Global alert ─────────────────────────────────────────────────── */
+  #global-alert {
+    left: 50%; top: 0; transform: translate(-50%, -120%);
+    width: 900px; text-align: center; padding: 20px; border-radius: 0 0 12px 12px;
+    z-index: 1500;
+  }
+  #global-alert.visible { transform: translate(-50%, 0); opacity: 1; }
+  #global-alert-text { font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 32px; letter-spacing: 2px; color: var(--accent); }
+  #global-alert-sub { font-size: 16px; color: #cfd8e3; margin-top: 6px; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+  <div id="bg-layer"><img id="bg-image" src="" alt=""></div>
+  <div id="camera-guide" hidden><span>CAMERA</span></div>
+
+  <!-- Scoreboard -->
+  <div id="full-scoreboard-wrapper">
+    <div class="scoreboard-main">
+      <div class="team-block home">
+        <img id="home-logo" class="logo" src="" alt="">
+        <span class="team-name display" id="display-home-team">HOME</span>
+      </div>
+      <div class="score-block">
+        <div class="score-digits">
+          <span class="num" id="display-home-score">0</span>
+          <span class="sep">:</span>
+          <span class="num" id="display-away-score">0</span>
+        </div>
+        <div id="display-time">0'</div>
+      </div>
+      <div class="team-block away">
+        <img id="away-logo" class="logo" src="" alt="">
+        <span class="team-name display" id="display-away-team">AWAY</span>
+      </div>
+    </div>
+    <div class="scorers-row">
+      <div class="scorers-col home" id="home-scorers-col"><span class="scorers-track" id="home-scorers-track"></span></div>
+      <div class="scorers-col away" id="away-scorers-col"><span class="scorers-track" id="away-scorers-track"></span></div>
+    </div>
+  </div>
+
+  <!-- Lineup -->
+  <div class="panel" id="lineup-panel">
+    <div class="panel-header"><img id="lineup-logo" src="" alt=""><span id="lineup-team-name">TEAM</span> <span id="lineup-formation" style="color:var(--accent); margin-left:auto;"></span></div>
+    <div class="pitch" id="lineup-pitch">
+      <div class="pitch-box top"></div>
+      <div class="pitch-box-small top"></div>
+      <div class="pitch-box bottom"></div>
+      <div class="pitch-box-small bottom"></div>
+      <div class="pitch-rows" id="lineup-rows"></div>
+    </div>
+  </div>
+
+  <!-- Penalty bar -->
+  <div class="panel" id="penalty-bar">
+    <div class="penalty-tab">PENALTY</div>
+    <div class="penalty-side home">
+      <span class="penalty-name" id="penalty-home-name">HOME</span>
+      <div class="penalty-circles" id="penalty-home-circles"></div>
+    </div>
+    <img id="penalty-comp-logo" src="" alt="">
+    <div class="penalty-side away">
+      <div class="penalty-circles away" id="penalty-away-circles"></div>
+      <span class="penalty-name" id="penalty-away-name">AWAY</span>
+    </div>
+  </div>
+
+  <!-- Socials -->
+  <div class="panel" id="socials-panel">
+    <div id="socials-inner">
+      <i class="fa-brands fa-x-twitter" id="socials-icon"></i>
+      <span id="socials-handle">@YourHandle</span>
+    </div>
+  </div>
+
+  <!-- Full screen event -->
+  <div class="panel" id="fs-event-container">
+    <div id="fs-event-icon">⚽</div>
+    <div id="fs-event-title">GOAL!</div>
+    <div id="fs-event-player"></div>
+  </div>
+
+  <!-- Global alert -->
+  <div class="panel" id="global-alert">
+    <div id="global-alert-text">HALF TIME</div>
+    <div id="global-alert-sub"></div>
+  </div>
+
+<script>
+const socket = io();
+
+// ── Seamless marquee (goal scorer ticker) ───────────────────────────
+const _marqueeCache = {};
+function updateSeamlessMarquee(colId, trackId, text) {
+  const col = document.getElementById(colId);
+  const track = document.getElementById(trackId);
+  const cache = _marqueeCache[trackId];
+
+  if (cache && cache.text === text && cache.running) return;
+
+  track.textContent = text || '';
+  track.style.animation = 'none';
+  track.style.transform = 'translateX(0)';
+
+  requestAnimationFrame(() => {
+    const overflow = track.scrollWidth > col.clientWidth;
+    if (overflow && text) {
+      const shift = -(track.scrollWidth + 40);
+      const duration = Math.max(6, track.scrollWidth / 60);
+      track.style.setProperty('--marquee-shift', `${shift}px`);
+      track.style.animation = `marquee-scroll ${duration}s linear infinite`;
+      _marqueeCache[trackId] = { text, running: true };
+    } else {
+      _marqueeCache[trackId] = { text, running: false };
+    }
+  });
+}
+
+// ── Scoreboard (LIVE_UPDATE) ─────────────────────────────────────────
+function handleLiveUpdate(d) {
+  document.getElementById('full-scoreboard-wrapper').classList.add('visible');
+  document.getElementById('display-home-team').textContent = d.homeTeam;
+  document.getElementById('display-away-team').textContent = d.awayTeam;
+  document.getElementById('display-home-score').textContent = d.homeScore;
+  document.getElementById('display-away-score').textContent = d.awayScore;
+  document.getElementById('display-time').textContent = d.time;
+  if (d.homeLogo) document.getElementById('home-logo').src = d.homeLogo;
+  if (d.awayLogo) document.getElementById('away-logo').src = d.awayLogo;
+  updateSeamlessMarquee('home-scorers-col', 'home-scorers-track', d.homeScorers);
+  updateSeamlessMarquee('away-scorers-col', 'away-scorers-track', d.awayScorers);
+}
+
+// ── Lineup — renders strikers at the top, goalkeeper at the bottom,
+// and auto-alternates home/away when the control panel asks for it ──
+const EVENT_ICONS = { goal: '⚽', og: '⚽', assist: '🅰️', yc: '🟨', rc: '🟥', sub: '↕️' };
+
+function getContrastColor(hex) {
+  if (!hex || hex[0] !== '#') return '#ffffff';
+  const h = hex.length === 4
+    ? hex.slice(1).split('').map((c) => c + c).join('')
+    : hex.slice(1, 7);
+  const r = parseInt(h.substr(0, 2), 16) || 0;
+  const g = parseInt(h.substr(2, 2), 16) || 0;
+  const b = parseInt(h.substr(4, 2), 16) || 0;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#161616' : '#ffffff';
+}
+
+function jerseyIcon(color, number) {
+  const textColor = getContrastColor(color);
+  return `
+    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <g stroke="rgba(0,0,0,0.35)" stroke-width="2" stroke-linejoin="round">
+        <polygon points="14,16 2,8 2,26 14,30" fill="${color}" />
+        <polygon points="50,16 62,8 62,26 50,30" fill="${color}" />
+        <path d="M14,16 Q20,9 25,14 Q32,22 39,14 Q44,9 50,16 L50,58 Q50,60 48,60 L16,60 Q14,60 14,58 Z" fill="${color}" />
+      </g>
+      <path d="M25,14.5 Q32,23 39,14.5" fill="none" stroke="rgba(0,0,0,0.25)" stroke-width="1.5" />
+      <text x="32" y="42" text-anchor="middle" font-family="Rajdhani, sans-serif" font-weight="700" font-size="20" fill="${textColor}">${number}</text>
+    </svg>`;
+}
+
+function renderLineup(team) {
+  const pitch = document.getElementById('lineup-rows');
+  pitch.innerHTML = '';
+  const rowCount = team.rows.length;
+  team.rows.forEach((row, i) => {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'pitch-row';
+    // Row 0 is the goalkeeper — invert so strikers (last row) render near
+    // the top of the pitch and the keeper sits near the bottom.
+    rowEl.style.top = `${((rowCount - 1 - i) / (rowCount - 1 || 1)) * 85 + 5}%`;
+    row.forEach(player => {
+      const token = document.createElement('div');
+      token.className = 'player-token';
+      const eventsHtml = (player.events || []).map(e => `<span class="player-event">${EVENT_ICONS[e] || ''}</span>`).join('');
+      token.innerHTML = `
+        <div class="player-circle">
+          ${jerseyIcon(team.primaryColor, player.number)}
+          ${player.isCaptain ? '<span class="player-captain">C</span>' : ''}
+          ${eventsHtml}
+        </div>
+        <div class="player-name">${player.name}</div>
+        ${player.events?.includes('sub') && player.subInName ? `<div class="player-sub-in">↳ ${player.subInName}</div>` : ''}
+      `;
+      rowEl.appendChild(token);
+    });
+    pitch.appendChild(rowEl);
+  });
+}
+
+let lineupState = { home: null, away: null, side: 'home', timer: null };
+
+function displayLineupSide(side, animate) {
+  const team = side === 'away' ? lineupState.away : lineupState.home;
+  if (!team) return;
+  lineupState.side = side;
+
+  const apply = () => {
+    document.getElementById('lineup-team-name').textContent = team.name;
+    document.getElementById('lineup-formation').textContent = team.formation || '';
+    if (team.logo) document.getElementById('lineup-logo').src = team.logo;
+    renderLineup(team);
+  };
+
+  if (!animate) { apply(); return; }
+
+  // Slide the outgoing side out, then slide the new side in from the
+  // opposite edge — home enters from the left, away from the right.
+  const header = document.querySelector('#lineup-panel .panel-header');
+  const rows = document.getElementById('lineup-rows');
+  const outDir = side === 'away' ? '-40px' : '40px';
+  const inDir = side === 'away' ? '40px' : '-40px';
+
+  [header, rows].forEach((el) => {
+    el.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+    el.style.transform = `translateX(${outDir})`;
+    el.style.opacity = 0;
+  });
+
+  setTimeout(() => {
+    apply();
+    [header, rows].forEach((el) => { el.style.transition = 'none'; el.style.transform = `translateX(${inDir})`; });
+    requestAnimationFrame(() => {
+      [header, rows].forEach((el) => {
+        el.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+        el.style.transform = 'translateX(0)';
+        el.style.opacity = 1;
+      });
+    });
+  }, 300);
+}
+
+function cycleLineupSide() {
+  displayLineupSide(lineupState.side === 'home' ? 'away' : 'home', true);
+}
+
+function handleShowLineups(d) {
+  const panel = document.getElementById('lineup-panel');
+  if (!d.show) {
+    panel.classList.remove('visible');
+    clearInterval(lineupState.timer);
+    return;
+  }
+  const wasVisible = panel.classList.contains('visible');
+  lineupState.home = d.home;
+  lineupState.away = d.away;
+  displayLineupSide(d.side || 'home', wasVisible);
+  panel.classList.add('visible');
+  clearInterval(lineupState.timer);
+  if (d.autoAlternate) lineupState.timer = setInterval(cycleLineupSide, 15000);
+}
+
+// ── Penalty bar ────────────────────────────────────────────────────────
+function renderPenaltyCircles(containerId, results) {
+  const el = document.getElementById(containerId);
+  const total = Math.max(results.length, 5);
+  let html = '';
+  for (let i = 0; i < total; i++) {
+    const r = results[i];
+    const cls = r === 'scored' ? 'scored' : r === 'missed' ? 'missed' : '';
+    html += `<div class="pk-dot ${cls}">${r === 'scored' ? '✓' : r === 'missed' ? '✗' : ''}</div>`;
+  }
+  el.innerHTML = html;
+}
+
+function handleTogglePenalty(d) {
+  const bar = document.getElementById('penalty-bar');
+  if (!d.show) { bar.classList.remove('visible'); return; }
+  document.getElementById('penalty-home-name').textContent = d.homeTeam;
+  document.getElementById('penalty-away-name').textContent = d.awayTeam;
+  if (d.compLogo) document.getElementById('penalty-comp-logo').src = d.compLogo;
+  renderPenaltyCircles('penalty-home-circles', d.homePenalties || []);
+  renderPenaltyCircles('penalty-away-circles', d.awayPenalties || []);
+  bar.classList.add('visible');
+}
+
+// ── Socials (alternates automatically when more than one is configured) ─
+const SOCIAL_ICONS = {
+  twitter: 'fa-brands fa-x-twitter', instagram: 'fa-brands fa-instagram',
+  tiktok: 'fa-brands fa-tiktok', youtube: 'fa-brands fa-youtube',
+};
+let socialsState = { list: [], index: 0, timer: null };
+
+function applySocial(s) {
+  document.getElementById('socials-icon').className = SOCIAL_ICONS[s.platform] || SOCIAL_ICONS.twitter;
+  document.getElementById('socials-handle').textContent = s.handle;
+}
+
+function showSocial(animate) {
+  const inner = document.getElementById('socials-inner');
+  const s = socialsState.list[socialsState.index];
+  if (!s) return;
+  if (!animate) {
+    applySocial(s);
+  } else {
+    inner.style.opacity = 0;
+    setTimeout(() => { applySocial(s); inner.style.opacity = 1; }, 300);
+  }
+}
+
+function cycleSocials() {
+  if (socialsState.list.length <= 1) return;
+  socialsState.index = (socialsState.index + 1) % socialsState.list.length;
+  showSocial(true);
+}
+
+function handleToggleSocials(d) {
+  const panel = document.getElementById('socials-panel');
+  if (!d.show) { panel.classList.remove('visible'); clearInterval(socialsState.timer); return; }
+
+  const list = (d.socials && d.socials.length) ? d.socials : (d.handle ? [{ handle: d.handle, platform: d.platform || 'twitter' }] : []);
+  if (!list.length) return;
+  const isFirstRender = !panel.classList.contains('visible');
+  socialsState.list = list;
+  socialsState.index = 0;
+  showSocial(!isFirstRender);
+  panel.classList.add('visible');
+  clearInterval(socialsState.timer);
+  if (list.length > 1) socialsState.timer = setInterval(cycleSocials, 5000);
+}
+
+// ── Full screen event ────────────────────────────────────────────────
+const FS_EVENT_MAP = {
+  goal:       { title: 'GOAL!',              icon: '⚽', spin: true },
+  owngoal:    { title: 'BUT CSC!',           icon: '⚽', spin: false },
+  yellowcard: { title: 'CARTON JAUNE',       icon: '🟨', spin: false },
+  redcard:    { title: 'CARTON ROUGE',       icon: '🟥', spin: false },
+  sub:        { title: 'REMPLACEMENT',       icon: '↕️', spin: false },
+  halftime:   { title: 'MI-TEMPS',           icon: '⏸️', spin: false },
+  fulltime:   { title: 'TEMPS RÉGLEMENTAIRE', icon: '🏁', spin: false },
+  var:        { title: 'VAR',                icon: '📺', spin: false },
+};
+
+let fsEventTimer = null;
+function handleFullScreenEvent(d) {
+  const cfg = FS_EVENT_MAP[d.type] || FS_EVENT_MAP.goal;
+  const container = document.getElementById('fs-event-container');
+  const icon = document.getElementById('fs-event-icon');
+  document.getElementById('fs-event-title').textContent = cfg.title;
+  icon.textContent = cfg.icon;
+  icon.classList.toggle('spin', !!cfg.spin);
+
+  let playerLine = '';
+  if (d.type === 'sub' && d.playerOut && d.playerIn) playerLine = `${d.playerOut} ↓ &nbsp;&nbsp; ${d.playerIn} ↑`;
+  else if (d.type === 'var' && d.decision) playerLine = d.decision;
+  else if (d.player) playerLine = d.player;
+  document.getElementById('fs-event-player').innerHTML = playerLine;
+
+  container.classList.add('visible');
+  clearTimeout(fsEventTimer);
+  fsEventTimer = setTimeout(() => container.classList.remove('visible'), 4000);
+}
+
+// ── Global alert ──────────────────────────────────────────────────────
+let alertTimer = null;
+function handleGlobalAlert(d) {
+  const el = document.getElementById('global-alert');
+  document.getElementById('global-alert-text').textContent = d.text || '';
+  document.getElementById('global-alert-sub').textContent = d.sub || '';
+  el.classList.add('visible');
+  clearTimeout(alertTimer);
+  alertTimer = setTimeout(() => el.classList.remove('visible'), (d.timeout || 6) * 1000);
+}
+
+// ── Theme, background & camera guide (live from the Control Panel) ──
+function handleSetTheme(d) {
+  const root = document.documentElement.style;
+  const map = {
+    accent: '--accent', gold: '--gold', homeColor: '--home-color', awayColor: '--away-color',
+    scoreboardStart: '--scoreboard-bg-start', scoreboardEnd: '--scoreboard-bg-end',
+    panelBg: '--panel-bg', panelBorder: '--panel-border',
+  };
+  Object.entries(map).forEach(([key, cssVar]) => {
+    if (d[key]) root.setProperty(cssVar, d[key]);
+  });
+}
+
+function handleSetBackground(d) {
+  const img = document.getElementById('bg-image');
+  if (!d.url) { img.classList.remove('visible', 'blurred'); img.removeAttribute('src'); return; }
+  img.src = d.url;
+  img.classList.toggle('blurred', !!d.blurred);
+  img.classList.add('visible');
+}
+
+function handleToggleCameraGuide(d) {
+  document.getElementById('camera-guide').hidden = !d.show;
+}
+
+// ── Dispatch ───────────────────────────────────────────────────────────
+const HANDLERS = {
+  SET_THEME: handleSetTheme,
+  SET_BACKGROUND: handleSetBackground,
+  TOGGLE_CAMERA_GUIDE: handleToggleCameraGuide,
+  LIVE_UPDATE: handleLiveUpdate,
+  SHOW_LINEUPS: handleShowLineups,
+  TOGGLE_PENALTY: handleTogglePenalty,
+  TOGGLE_SOCIALS: handleToggleSocials,
+  FULL_SCREEN_EVENT: handleFullScreenEvent,
+  GLOBAL_ALERT: handleGlobalAlert,
+};
+
+socket.on('sync_overlay', (msg) => {
+  const handler = HANDLERS[msg.type];
+  if (handler) handler(msg.payload || {});
+});
+</script>
+</body>
+</html>
